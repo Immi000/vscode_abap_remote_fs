@@ -5259,6 +5259,102 @@
           "default": "",
           "description": "API key for MCP server authentication. When set, clients must include this key in the Authorization header (Bearer token). Leave empty to allow unauthenticated local access (not recommended for shared machines)."
         },
+        "abapfs.writePolicy.enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "markdownDescription": "Restrict which SAP objects ABAP FS may create, change, delete, activate or edit text elements for. Applies to GitHub Copilot, the MCP server and manual actions alike. Only read from **user settings** — workspace settings are ignored so an AI agent cannot weaken the policy. SAP authorizations (S_DEVELOP) remain the authoritative control. Configure the rules in `#abapfs.writePolicy.rules#`."
+        },
+        "abapfs.writePolicy.mode": {
+          "type": "string",
+          "default": "allowlist",
+          "scope": "application",
+          "enum": [
+            "allowlist",
+            "denylist"
+          ],
+          "markdownEnumDescriptions": [
+            "Only operations matching at least one rule are allowed. Everything else is blocked (recommended).",
+            "Operations matching any rule are blocked. Everything else is allowed."
+          ],
+          "markdownDescription": "How `#abapfs.writePolicy.rules#` are interpreted when the write policy is enabled."
+        },
+        "abapfs.writePolicy.onViolation": {
+          "type": "string",
+          "default": "block",
+          "scope": "application",
+          "enum": [
+            "block",
+            "confirm"
+          ],
+          "markdownEnumDescriptions": [
+            "Refuse the operation. The AI assistant receives an error explaining that the write policy blocked it.",
+            "Show a warning dialog with an \"Allow once\" button. Requests coming from the MCP server are always blocked, never confirmed."
+          ],
+          "markdownDescription": "What happens when an operation is not permitted by the write policy."
+        },
+        "abapfs.writePolicy.rules": {
+          "type": "array",
+          "default": [],
+          "scope": "application",
+          "markdownDescription": "Write policy rules. A rule matches when **all** of its specified fields match; a missing or empty field matches everything. Patterns support `*` and `?` and are case-insensitive. Includes are checked against their main object (e.g. the class of a method include, the function group of a function module). The package is the object's immediate package; if it cannot be determined, package patterns do not match.\n\nExample: `[{ \"connections\": [\"dev*\"], \"packages\": [\"$TMP\", \"Z_AI_SANDBOX*\"] }]`",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "connections": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Connection IDs as shown in ABAP FS (e.g. \"dev100\", \"dev*\")."
+              },
+              "packages": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Package names (e.g. \"$TMP\", \"Z_AI_SANDBOX*\")."
+              },
+              "names": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Object names (e.g. \"ZCL_AI_*\")."
+              },
+              "types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "ADT object types (e.g. \"CLAS/OC\", \"PROG/P\", \"FUGR/F\", \"DDLS/DF\")."
+              },
+              "operations": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "write",
+                    "delete",
+                    "create",
+                    "activate",
+                    "textElements"
+                  ],
+                  "enumDescriptions": [
+                    "Change source code (saves, AI edits, test include creation, refactorings, abapGit pull)",
+                    "Delete objects",
+                    "Create new objects",
+                    "Activate objects",
+                    "Create or update text elements"
+                  ]
+                },
+                "description": "Operations the rule applies to. Omit to apply to all operations."
+              }
+            }
+          }
+        },
         "abapfs.autoOpenUnsupportedInGui": {
           "type": "boolean",
           "default": true,
