@@ -65,10 +65,15 @@ jest.mock(
 
 jest.mock("./lm-tools/toolGuard", () => ({
   assertToolInvocationAuthorized: jest.fn(),
-  isToolInvocationAuthorized: jest.fn(() => true)
+  isToolInvocationAuthorized: jest.fn(() => true),
+  createMcpAuthorizedOptions: jest.fn((input: unknown) => ({ input }))
 }))
+jest.mock("../adt/conections", () => ({ getRoot: jest.fn(), getOrCreateRoot: jest.fn() }))
 import * as vscode from "vscode"
+import { toolRegistry } from "./lm-tools/toolRegistry"
+import { isMcpInvocation } from "./writePolicy"
 import {
+  createMcpServer,
   initializeMcpServer,
   getMcpServerStatus,
   jsonSchemaPropertyToZod,
@@ -140,6 +145,44 @@ describe("mcpServer", () => {
       const status = getMcpServerStatus()
       expect(status.isRunning).toBe(false)
     })
+  })
+})
+
+describe("createMcpServer write policy context", () => {
+  afterEach(() => {
+    ;(vscode.lm as any).tools = []
+    ;(toolRegistry.get as jest.Mock).mockReturnValue(undefined)
+  })
+
+  const registeredHandler = (name: string) => {
+    const server = createMcpServer() as any
+    const call = (server.registerTool as jest.Mock).mock.calls.find(c => c[0] === name)
+    return call[2] as (args: Record<string, unknown>) => Promise<any>
+  }
+
+  it("runs wrapped LM tools inside the MCP context", async () => {
+    let seen: boolean | undefined
+    ;(vscode.lm as any).tools = [
+      { name: "abapfs_test_tool", description: "", tags: ["abap-fs"], inputSchema: {} }
+    ]
+    ;(toolRegistry.get as jest.Mock).mockReturnValue({
+      invoke: jest.fn(async () => {
+        await new Promise(resolve => setTimeout(resolve, 1))
+        seen = isMcpInvocation()
+        return { content: [] }
+      })
+    })
+
+    const result = await registeredHandler("abapfs_test_tool")({})
+
+    expect(result.isError).toBeUndefined()
+    expect(seen).toBe(true)
+    expect(isMcpInvocation()).toBe(false)
+  })
+
+  it("registers MCP-only tools inside the MCP context", () => {
+    expect(registeredHandler("replace_string_in_abap_object")).toBeInstanceOf(Function)
+    expect(registeredHandler("get_abap_diagnostics")).toBeInstanceOf(Function)
   })
 })
 

@@ -98,6 +98,10 @@ jest.mock("./LocalFsProvider", () => {
 })
 
 jest.mock("abap-adt-api", () => ({ isHttpError: jest.fn() }))
+jest.mock("../services/writePolicy", () => ({
+  assertWriteAllowed: jest.fn(),
+  targetFromObject: jest.fn()
+}))
 jest.mock("abapfs/out/lockManager", () => ({ ReloginError: { isReloginError: jest.fn() } }))
 jest.mock("../services/funMessenger", () => ({
   funWindow: {
@@ -326,6 +330,68 @@ describe("FsProvider", () => {
       const uri = makeUri("/sap/bc/adt/missing")
 
       await expect(instance.stat(uri)).rejects.toBeDefined()
+    })
+  })
+
+  describe("write policy", () => {
+    const { getOrCreateRoot } = require("../adt/conections")
+    const { isAbapFile } = require("abapfs")
+    const { selectTransportIfNeeded } = require("../adt/AdtTransports")
+    const { assertWriteAllowed, targetFromObject } = require("../services/writePolicy")
+    const denied = Object.assign(new Error("Blocked by ABAP FS write policy"), {
+      name: "WritePolicyError"
+    })
+
+    const setup = () => {
+      const node = { object: { name: "ZCL_X" }, write: jest.fn(), delete: jest.fn() }
+      const lockManager = {
+        finalStatus: jest.fn().mockResolvedValue({ status: "unlocked" }),
+        requestLock: jest.fn().mockResolvedValue({ status: "locked", LOCK_HANDLE: "H" }),
+        requestUnlock: jest.fn().mockResolvedValue({ status: "unlocked" }),
+        lockStatus: jest.fn().mockReturnValue({ status: "locked", LOCK_HANDLE: "H" })
+      }
+      const root = { getNodeAsync: jest.fn().mockResolvedValue(node), lockManager }
+      ;(LocalFsProvider.useLocalStorage as jest.Mock).mockReturnValue(false)
+      ;(getOrCreateRoot as jest.Mock).mockResolvedValue(root)
+      ;(isAbapFile as jest.Mock).mockReturnValue(true)
+      ;(selectTransportIfNeeded as jest.Mock).mockResolvedValue({ cancelled: false, transport: "" })
+      ;(targetFromObject as jest.Mock).mockResolvedValue({ name: "ZCL_X" })
+      return { node, lockManager, instance: FsProvider.get(context) }
+    }
+
+    it("writeFile rejects a denied target without locking or writing", async () => {
+      const { node, lockManager, instance } = setup()
+      ;(assertWriteAllowed as jest.Mock).mockRejectedValue(denied)
+
+      await expect(instance.writeFile(makeUri("/zcl_x"), Buffer.from("x"))).rejects.toBe(denied)
+
+      expect(assertWriteAllowed).toHaveBeenCalledWith({ name: "ZCL_X" }, "write")
+      expect(lockManager.requestLock).not.toHaveBeenCalled()
+      expect(lockManager.requestUnlock).not.toHaveBeenCalled()
+      expect(node.write).not.toHaveBeenCalled()
+    })
+
+    it("writeFile writes an allowed target", async () => {
+      const { node, lockManager, instance } = setup()
+      ;(assertWriteAllowed as jest.Mock).mockResolvedValue(undefined)
+
+      await instance.writeFile(makeUri("/zcl_x"), Buffer.from("x"))
+
+      expect(lockManager.requestLock).toHaveBeenCalled()
+      expect(node.write).toHaveBeenCalledWith("x", "H", "")
+    })
+
+    it("delete rejects a denied target without locking or deleting", async () => {
+      const { node, lockManager, instance } = setup()
+      ;(assertWriteAllowed as jest.Mock).mockRejectedValue(denied)
+
+      await expect(instance.delete(makeUri("/zcl_x"), { recursive: false })).rejects.toThrow(
+        /write policy/
+      )
+
+      expect(assertWriteAllowed).toHaveBeenCalledWith({ name: "ZCL_X" }, "delete")
+      expect(lockManager.requestLock).not.toHaveBeenCalled()
+      expect(node.delete).not.toHaveBeenCalled()
     })
   })
 })

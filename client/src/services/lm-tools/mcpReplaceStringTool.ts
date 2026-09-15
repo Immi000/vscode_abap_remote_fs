@@ -18,6 +18,9 @@
  */
 
 import * as vscode from "vscode"
+import { isAbapFile } from "abapfs"
+import { getOrCreateRoot } from "../../adt/conections"
+import { assertWriteAllowed, targetFromObject } from "../writePolicy"
 
 // ============================================================================
 // INTERFACE
@@ -102,6 +105,15 @@ export function findAndReplace(content: string, oldString: string, newString: st
   return content.replace(oldString, newString)
 }
 
+async function assertMcpWriteAllowed(uri: vscode.Uri) {
+  const root = await getOrCreateRoot(uri.authority)
+  const node = await root.getNodeAsync(uri.path)
+  // Non-ABAP files are rejected by the filesystem provider itself
+  if (!isAbapFile(node)) return
+  const target = await targetFromObject(uri.authority, node.object)
+  await assertWriteAllowed(target, "write", { fromMcp: true })
+}
+
 /**
  * Execute the replace operation against the VS Code filesystem.
  * This goes through the adt:// filesystem provider which handles
@@ -128,6 +140,11 @@ export async function executeReplace(
 
   // Perform the replacement
   const updatedContent = findAndReplace(currentContent, oldString, newString)
+
+  // This tool is only reachable through the MCP server: check the write policy explicitly
+  // with MCP semantics (never "confirm") instead of relying on the async context reaching
+  // FsProvider.writeFile through workspace.fs
+  await assertMcpWriteAllowed(uri)
 
   // Write back through the filesystem provider (handles lock/transport/sync)
   // IMPORTANT: Must use Buffer.from() not TextEncoder - the FsProvider calls

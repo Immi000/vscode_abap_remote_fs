@@ -27,6 +27,7 @@ import { createMcpAuthorizedOptions } from "./lm-tools/toolGuard"
 import { funWindow as window } from "./funMessenger"
 import { executeReplace } from "./lm-tools/mcpReplaceStringTool"
 import { getDiagnosticsForUri } from "./lm-tools/mcpGetDiagnosticsTool"
+import { runAsMcp } from "./writePolicy"
 
 // ============================================================================
 // TYPES
@@ -214,9 +215,18 @@ export function jsonSchemaToZod(
 const ABAP_FS_TAG = "abap-fs"
 
 /**
+ * Runs an MCP tool handler inside the MCP async context, so the write policy
+ * never offers the interactive "confirm" override for MCP-initiated writes.
+ */
+const asMcp =
+  <A extends unknown[], R>(handler: (...args: A) => R) =>
+  (...args: A): R =>
+    runAsMcp(() => handler(...args))
+
+/**
  * Create an MCP server that dynamically wraps all VS Code LM tools
  */
-function createMcpServer(): McpServer {
+export function createMcpServer(): McpServer {
   const server = new McpServer({
     name: "abap-fs",
     version: "1.0.0"
@@ -242,7 +252,7 @@ function createMcpServer(): McpServer {
         description: toolDescription,
         inputSchema: zodSchema
       },
-      async (args: Record<string, unknown>) => {
+      asMcp(async (args: Record<string, unknown>) => {
         try {
           const tokenSource = new vscode.CancellationTokenSource()
 
@@ -310,7 +320,7 @@ function createMcpServer(): McpServer {
             isError: true
           }
         }
-      }
+      })
     )
   }
 
@@ -352,7 +362,7 @@ function createMcpServer(): McpServer {
           .describe("The replacement text. Ensure the resulting code is syntactically valid ABAP.")
       }
     },
-    async (args: Record<string, unknown>) => {
+    asMcp(async (args: Record<string, unknown>) => {
       try {
         const fileUri = args.fileUri as string
         const oldString = args.oldString as string
@@ -395,7 +405,7 @@ function createMcpServer(): McpServer {
           isError: true
         }
       }
-    }
+    })
   )
 
   // Get Diagnostics - returns syntax errors/warnings for a given ABAP file
@@ -418,7 +428,7 @@ function createMcpServer(): McpServer {
           )
       }
     },
-    async (args: Record<string, unknown>) => {
+    asMcp(async (args: Record<string, unknown>) => {
       try {
         const fileUri = args.fileUri as string
         if (!fileUri) {
@@ -437,7 +447,7 @@ function createMcpServer(): McpServer {
           isError: true
         }
       }
-    }
+    })
   )
 
   return server

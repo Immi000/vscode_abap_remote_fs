@@ -23,6 +23,7 @@ import { isHttpError } from "abap-adt-api"
 import { ReloginError } from "abapfs/out/lockManager"
 import { funWindow as window } from "../services/funMessenger"
 import { AbapObject } from "abapobject"
+import { assertWriteAllowed, targetFromObject } from "../services/writePolicy"
 
 const openInGui = (uri: Uri, object: AbapObject) => {
   const guiObjects = object.gui_objects
@@ -314,6 +315,8 @@ export class FsProvider implements FileSystemProvider {
       const node = await root.getNodeAsync(uri.path)
       if (isAbapFile(node)) {
         handleTelemetry(uri)
+        // Check the write policy before locking, so a denied write never leaves a lock behind
+        await assertWriteAllowed(await targetFromObject(uri.authority, node.object), "write")
         // Always request lock to add claim - prevents deferred unlock race condition
         const oldlock = (await root.lockManager.finalStatus(uri.path)).status
         await root.lockManager.requestLock(uri.path)
@@ -339,6 +342,8 @@ export class FsProvider implements FileSystemProvider {
     try {
       const root = await getOrCreateRoot(uri.authority)
       const node = await root.getNodeAsync(uri.path)
+      if (isAbapFolder(node) || isAbapFile(node))
+        await assertWriteAllowed(await targetFromObject(uri.authority, node.object), "delete")
       const lock = await root.lockManager.requestLock(uri.path)
       if (lock.status === "locked") {
         const trsel = await selectTransportIfNeeded(uri)
