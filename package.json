@@ -5347,10 +5347,10 @@
                     "Delete objects",
                     "Create new objects",
                     "Activate objects",
-                    "Create or update text elements"
+                    "Create or update text elements (saving text elements also activates the object, so \"activate\" must be allowed as well)"
                   ]
                 },
-                "description": "Operations the rule applies to. Omit to apply to all operations."
+                "description": "Operations the rule applies to. Omit to apply to all operations. Unknown operation names never allow and always block."
               }
             }
           }

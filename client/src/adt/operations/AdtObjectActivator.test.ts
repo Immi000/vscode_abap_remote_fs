@@ -60,8 +60,8 @@ jest.mock("abapobject", () => ({}))
 jest.mock("../../services/writePolicy", () => ({
   assertWriteAllowed: jest.fn(),
   assertWriteAllowedAll: jest.fn(),
-  targetFromObject: jest.fn(async () => ({ name: "MAIN" })),
-  targetFromAdtObject: jest.fn(async () => ({ name: "OTHER" })),
+  targetFromObject: jest.fn(async (_conn: string, o: { name: string }) => ({ name: o.name })),
+  targetFromAdtObject: jest.fn(async (_c: string, _t: string, name: string) => ({ name })),
   targetKey: jest.fn((t: { name: string }) => t.name)
 }))
 import { AdtObjectActivator, ActivationEvent } from "./AdtObjectActivator"
@@ -135,29 +135,32 @@ describe("AdtObjectActivator", () => {
     }
     const uri = { authority: "conn", path: "/zcl_x" } as any
 
+    const sibling = (uri: string, name: string) => ({
+      object: {
+        "adtcore:uri": uri,
+        "adtcore:parentUri": "/classes/zcl_x",
+        "adtcore:type": "CLAS/I",
+        "adtcore:name": name
+      }
+    })
+    const withSiblings = () =>
+      mockClient.inactiveObjects.mockResolvedValue([
+        sibling("/classes/zcl_x", "ZCL_X"),
+        sibling("/classes/zcl_other", "ZCL_OTHER")
+      ])
+
     it("rejects activation of a denied object before calling SAP", async () => {
       ;(writePolicy.assertWriteAllowed as jest.Mock).mockRejectedValueOnce(denied)
       const activator = AdtObjectActivator.get("conn")
 
       await expect(activator.activate(makeObject(), uri, false)).rejects.toBe(denied)
 
-      expect(writePolicy.assertWriteAllowed).toHaveBeenCalledWith({ name: "MAIN" }, "activate")
+      expect(writePolicy.assertWriteAllowed).toHaveBeenCalledWith({ name: "ZCL_X" }, "activate")
       expect(mockClient.activate).not.toHaveBeenCalled()
     })
 
-    it("checks additional inactive objects activated together", async () => {
-      const sibling = (uri: string, name: string) => ({
-        object: {
-          "adtcore:uri": uri,
-          "adtcore:parentUri": "/classes/zcl_x",
-          "adtcore:type": "CLAS/I",
-          "adtcore:name": name
-        }
-      })
-      mockClient.inactiveObjects.mockResolvedValue([
-        sibling("/classes/zcl_x", "ZCL_X"),
-        sibling("/classes/zcl_other", "ZCL_OTHER")
-      ])
+    it("checks additional inactive objects activated together, but not the main object again", async () => {
+      withSiblings()
       ;(writePolicy.assertWriteAllowedAll as jest.Mock).mockRejectedValue(denied)
       const activator = AdtObjectActivator.get("conn")
 
@@ -166,10 +169,23 @@ describe("AdtObjectActivator", () => {
       expect(result.ok).toBe(false)
       expect(result.summary).toContain("write policy")
       expect(writePolicy.assertWriteAllowedAll).toHaveBeenCalledWith(
-        [{ name: "OTHER" }, { name: "OTHER" }],
+        [{ name: "ZCL_OTHER" }],
         "activate"
       )
       expect(mockClient.activate).not.toHaveBeenCalled()
+    })
+
+    it("does not check allowed objects again on the retry", async () => {
+      withSiblings()
+      ;(writePolicy.assertWriteAllowedAll as jest.Mock).mockResolvedValue(undefined)
+      mockClient.activate.mockResolvedValue({ success: false, messages: [], inactive: [] })
+      const activator = AdtObjectActivator.get("conn")
+
+      const result = await activator.activate(makeObject(), uri, false)
+
+      expect(result.ok).toBe(false)
+      expect(mockClient.activate).toHaveBeenCalledTimes(2)
+      expect(writePolicy.assertWriteAllowedAll).toHaveBeenCalledTimes(1)
     })
   })
 })

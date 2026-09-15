@@ -26,6 +26,7 @@ jest.mock("abap-adt-api", () => ({
 }))
 
 import {
+  assertTextElementsAllowed,
   assertWriteAllowed,
   assertWriteAllowedAll,
   assertWriteNotBlocked,
@@ -34,9 +35,12 @@ import {
   globToRegExp,
   isMcpInvocation,
   packageFromPath,
+  packageTarget,
   readWritePolicyConfig,
   runAsMcp,
+  targetFromAdtObject,
   targetFromObject,
+  textElementsTarget,
   WritePolicyError,
   WriteTarget
 } from "./writePolicy"
@@ -113,6 +117,31 @@ describe("configuration", () => {
     const config = readWritePolicyConfig()
     expect(config.mode).toBe("allowlist")
     expect(config.onViolation).toBe("block")
+  })
+
+  test("normalizes operation names and keeps unknown ones apart with a warning", () => {
+    setPolicy({ enabled: true, rules: [{ operations: ["Write", "activation"] }] })
+    readWritePolicyConfig()
+    expect(readWritePolicyConfig().rules[0]).toEqual({
+      operations: ["write"],
+      invalidOperations: ["activation"]
+    })
+    expect(log.warn).toHaveBeenCalledTimes(1)
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('"activation"'))
+  })
+})
+
+describe("unknown operation names", () => {
+  const rule = { packages: ["Z_AI_SANDBOX"], operations: ["bogus"] }
+
+  test("never allow in allowlist mode", async () => {
+    setPolicy({ enabled: true, rules: [rule] })
+    await expect(assertWriteAllowed(target(), "activate")).rejects.toThrow(WritePolicyError)
+  })
+
+  test("always block in denylist mode", async () => {
+    setPolicy({ enabled: true, mode: "denylist", rules: [rule] })
+    await expect(assertWriteAllowed(target(), "write")).rejects.toThrow(WritePolicyError)
   })
 })
 
@@ -196,6 +225,34 @@ describe("allowlist", () => {
   })
 })
 
+describe("text elements", () => {
+  const onlyText = { packages: ["ZTEXT"], operations: ["textElements"] }
+  const textAndActivate = { packages: ["ZBOTH"], operations: ["textElements", "activate"] }
+  beforeEach(() => setPolicy({ enabled: true, rules: [onlyText, textAndActivate] }))
+
+  test("require the activate operation as well", async () => {
+    const promise = assertTextElementsAllowed(target({ packageName: "ZTEXT" }))
+    await expect(promise).rejects.toThrow(/operation "activate" is not permitted/)
+    await expect(assertTextElementsAllowed(target({ packageName: "ZBOTH" }))).resolves.toBe(
+      undefined
+    )
+  })
+
+  test("report both operations and ask only once in confirm mode", async () => {
+    setPolicy({ enabled: true, onViolation: "confirm", rules: [textAndActivate] })
+    showWarning.mockResolvedValue("Allow once")
+    await expect(assertTextElementsAllowed(target({ packageName: "ZPROD" }))).resolves.toBe(
+      undefined
+    )
+    expect(showWarning).toHaveBeenCalledTimes(1)
+    expect(showWarning).toHaveBeenCalledWith(
+      expect.stringContaining('operation "textElements" and "activate"'),
+      { modal: true },
+      "Allow once"
+    )
+  })
+})
+
 describe("denylist", () => {
   beforeEach(() =>
     setPolicy({ enabled: true, mode: "denylist", rules: [{ packages: ["ZPROD*"] }] })
@@ -273,7 +330,10 @@ describe("early check in block mode", () => {
 
 describe("target resolution", () => {
   const objectPath = jest.fn()
-  beforeEach(() => mockGetRoot.mockReturnValue({ service: { objectPath } }))
+  beforeEach(() => {
+    setPolicy({ enabled: true })
+    mockGetRoot.mockReturnValue({ service: { objectPath } })
+  })
 
   test("packageFromPath returns the immediate package", () => {
     const steps = [step("DEVC/K", "ZMAIN"), step("DEVC/K", "ZSUB"), step("CLAS/OC", "ZCL_X")]
@@ -335,5 +395,108 @@ describe("target resolution", () => {
       packageName: "$TMP"
     })
     expect(objectPath).not.toHaveBeenCalled()
+  })
+
+  test("does not contact SAP while the policy is disabled", async () => {
+    setPolicy({ enabled: false })
+    const findByAdtUri = jest.fn()
+    mockGetRoot.mockReturnValue({ service: { objectPath }, findByAdtUri })
+    const obj: any = { type: "PROG/P", name: "ZPROG", path: "/p" }
+    obj.lockObject = obj
+
+    expect(await targetFromObject("dev100", obj)).toEqual({
+      connectionId: "dev100",
+      name: "ZPROG",
+      type: "PROG/P",
+      packageName: undefined
+    })
+    expect(await targetFromAdtObject("dev100", "PROG/P", "ZPROG", "/p")).toEqual({
+      connectionId: "dev100",
+      name: "ZPROG",
+      type: "PROG/P"
+    })
+    await creationTarget("dev100", { objtype: "FUGR/FF", name: "Z_FM", parentName: "ZFG" }, "$TMP")
+
+    expect(mockGetRoot).not.toHaveBeenCalled()
+    expect(objectPath).not.toHaveBeenCalled()
+    expect(findByAdtUri).not.toHaveBeenCalled()
+  })
+
+  describe("targetFromAdtObject", () => {
+    const findByAdtUri = jest.fn()
+    beforeEach(() => {
+      setPolicy({ enabled: true })
+      mockGetRoot.mockReturnValue({ service: { objectPath }, findByAdtUri })
+      objectPath.mockResolvedValue([step("DEVC/K", "ZPKG"), step("CLAS/OC", "ZCL_MAIN")])
+    })
+
+    test("resolves includes found in the filesystem to their main object", async () => {
+      const main: any = { type: "CLAS/OC", name: "ZCL_MAIN", path: "/classes/zcl_main" }
+      main.lockObject = main
+      const include = {
+        type: "CLAS/I",
+        name: "ZCL_MAIN======CCIMP",
+        path: "/inc",
+        lockObject: main
+      }
+      findByAdtUri.mockResolvedValue({ file: { object: include } })
+
+      const result = await targetFromAdtObject("dev100", "CLAS/I", "ZCL_MAIN======CCIMP", "/inc")
+
+      expect(result).toEqual({
+        connectionId: "dev100",
+        name: "ZCL_MAIN",
+        type: "CLAS/OC",
+        packageName: "ZPKG"
+      })
+      expect(objectPath).toHaveBeenCalledWith("/classes/zcl_main")
+    })
+
+    test("falls back to the ADT URI when the object is not in the filesystem", async () => {
+      findByAdtUri.mockResolvedValue(undefined)
+      const result = await targetFromAdtObject("dev100", "CLAS/OC", "ZCL_MAIN", "/adt/zcl_main")
+      expect(result).toEqual({
+        connectionId: "dev100",
+        name: "ZCL_MAIN",
+        type: "CLAS/OC",
+        packageName: "ZPKG"
+      })
+      expect(objectPath).toHaveBeenCalledWith("/adt/zcl_main")
+    })
+
+    test("falls back to the ADT URI when the filesystem lookup fails", async () => {
+      findByAdtUri.mockRejectedValue(new Error("not connected"))
+      const result = await targetFromAdtObject("dev100", "CLAS/OC", "ZCL_MAIN", "/adt/zcl_main")
+      expect(result.packageName).toBe("ZPKG")
+      expect(log.debug).toHaveBeenCalledWith(expect.stringContaining("not connected"))
+    })
+  })
+
+  describe("textElementsTarget", () => {
+    beforeEach(() => {
+      setPolicy({ enabled: true })
+      objectPath.mockResolvedValue([step("DEVC/K", "ZPKG"), step("PROG/P", "ZPROG")])
+    })
+
+    test.each([
+      ["zprog", undefined, "PROG/P", "ZPROG", "/sap/bc/adt/prog/p/zprog"],
+      ["ZPROG.prog.abap", undefined, "PROG/P", "ZPROG", "/sap/bc/adt/prog/p/zprog"],
+      ["zcl_x", "CLASS", "CLAS/OC", "ZCL_X", "/sap/bc/adt/clas/oc/zcl_x"],
+      ["zfg", "FUNCTION_GROUP", "FUGR/F", "ZFG", "/sap/bc/adt/fugr/f/zfg"],
+      ["z_fm.func.abap", undefined, "PROG/P", "Z_FM", "/sap/bc/adt/prog/p/z_fm"]
+    ])("%s (%s) -> %s %s", async (objectName, objectType, type, name, uri) => {
+      const result = await textElementsTarget("dev100", objectName, objectType)
+      expect(result).toEqual({ connectionId: "dev100", name, type, packageName: "ZPKG" })
+      expect(objectPath).toHaveBeenCalledWith(uri)
+    })
+  })
+
+  test("packageTarget describes the package itself", () => {
+    expect(packageTarget("dev100", "Z_AI_SANDBOX")).toEqual({
+      connectionId: "dev100",
+      name: "Z_AI_SANDBOX",
+      type: "DEVC/K",
+      packageName: "Z_AI_SANDBOX"
+    })
   })
 })

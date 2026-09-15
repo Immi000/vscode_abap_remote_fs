@@ -115,6 +115,12 @@ import { FsProvider } from "./FsProvider"
 import { LocalFsProvider as _LocalFsProvider } from "./LocalFsProvider"
 const LocalFsProvider = _LocalFsProvider as any
 import * as vscode from "vscode"
+import { getOrCreateRoot } from "../adt/conections"
+import { isAbapFile } from "abapfs"
+import { selectTransportIfNeeded } from "../adt/AdtTransports"
+import { assertWriteAllowed, targetFromObject } from "../services/writePolicy"
+
+const mockIsAbapFile = isAbapFile as unknown as jest.Mock
 
 const makeUri = (path = "/test", scheme = "adt", authority = "host") =>
   ({
@@ -291,12 +297,10 @@ describe("FsProvider", () => {
 
     it("throws Unavailable when no ABAP file found", async () => {
       ;(LocalFsProvider.useLocalStorage as jest.Mock).mockReturnValue(false)
-      const { getOrCreateRoot } = require("../adt/conections")
-      const { isAbapFile } = require("abapfs")
       ;(getOrCreateRoot as jest.Mock).mockResolvedValue({
         getNodeAsync: jest.fn().mockResolvedValue(null)
       })
-      ;(isAbapFile as jest.Mock).mockReturnValue(false)
+      mockIsAbapFile.mockReturnValue(false)
 
       const instance = FsProvider.get(context)
       const uri = makeUri("/sap/bc/adt/prog")
@@ -321,7 +325,6 @@ describe("FsProvider", () => {
 
     it("throws FileNotFound when node not found", async () => {
       ;(LocalFsProvider.useLocalStorage as jest.Mock).mockReturnValue(false)
-      const { getOrCreateRoot } = require("../adt/conections")
       ;(getOrCreateRoot as jest.Mock).mockResolvedValue({
         getNodeAsync: jest.fn().mockResolvedValue(null)
       })
@@ -334,10 +337,6 @@ describe("FsProvider", () => {
   })
 
   describe("write policy", () => {
-    const { getOrCreateRoot } = require("../adt/conections")
-    const { isAbapFile } = require("abapfs")
-    const { selectTransportIfNeeded } = require("../adt/AdtTransports")
-    const { assertWriteAllowed, targetFromObject } = require("../services/writePolicy")
     const denied = Object.assign(new Error("Blocked by ABAP FS write policy"), {
       name: "WritePolicyError"
     })
@@ -353,7 +352,7 @@ describe("FsProvider", () => {
       const root = { getNodeAsync: jest.fn().mockResolvedValue(node), lockManager }
       ;(LocalFsProvider.useLocalStorage as jest.Mock).mockReturnValue(false)
       ;(getOrCreateRoot as jest.Mock).mockResolvedValue(root)
-      ;(isAbapFile as jest.Mock).mockReturnValue(true)
+      mockIsAbapFile.mockReturnValue(true)
       ;(selectTransportIfNeeded as jest.Mock).mockResolvedValue({ cancelled: false, transport: "" })
       ;(targetFromObject as jest.Mock).mockResolvedValue({ name: "ZCL_X" })
       return { node, lockManager, instance: FsProvider.get(context) }

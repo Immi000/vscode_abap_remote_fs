@@ -463,7 +463,7 @@ Array of rules. A rule matches when all specified fields match; missing or empty
 | `packages` | string[] | Immediate package of the object, e.g. `"$TMP"`, `"Z_AI_SANDBOX*"`. Unknown packages never match. |
 | `names` | string[] | Object names, e.g. `"ZCL_AI_*"`. Includes are checked against their main object (class, function group). |
 | `types` | string[] | ADT object types, e.g. `"CLAS/OC"`, `"PROG/P"` |
-| `operations` | string[] | `write`, `delete`, `create`, `activate`, `textElements`. Omit for all operations. |
+| `operations` | string[] | `write`, `delete`, `create`, `activate`, `textElements`. Omit for all operations. Saving text elements also activates, so `textElements` needs `activate` too. Unknown names never allow and always block. |
 
 **Example:**
 ```json

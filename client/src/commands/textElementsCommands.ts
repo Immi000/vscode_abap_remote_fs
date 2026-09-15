@@ -14,7 +14,7 @@ import { isAbapFile } from "abapfs"
 import { parseObjectName } from "../adt/textElements"
 import { SapGuiPanel } from "../views/sapgui/SapGuiPanel"
 import { RemoteManager } from "../config"
-import { assertWriteAllowed, textElementsTarget } from "../services/writePolicy"
+import { assertTextElementsAllowed, textElementsTarget } from "../services/writePolicy"
 
 const TEXT_ELEMENT_CATEGORIES: TextElementCategory[] = ["symbols", "selections", "headings"]
 type TextElementsByCategory = Record<TextElementCategory, TextElement[]>
@@ -378,7 +378,7 @@ async function handleSaveTextElements(
   connectionId: string
 ): Promise<void> {
   try {
-    await assertWriteAllowed(await textElementsTarget(connectionId, programName), "textElements")
+    await assertTextElementsAllowed(await textElementsTarget(connectionId, programName))
     // Get client using the connectionId from the original context - get original client, not clone
     const client = getClient(connectionId, false) // false = don't clone, get original client
     if (!client) {

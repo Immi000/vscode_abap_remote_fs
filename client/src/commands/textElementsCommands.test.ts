@@ -59,7 +59,7 @@ jest.mock("../config", () => ({
 }))
 
 jest.mock("../services/writePolicy", () => ({
-  assertWriteAllowed: jest.fn(),
+  assertTextElementsAllowed: jest.fn(),
   textElementsTarget: jest.fn(async () => ({}))
 }))
 import { manageTextElementsCommand, openTextElementsInSapGui } from "./textElementsCommands"

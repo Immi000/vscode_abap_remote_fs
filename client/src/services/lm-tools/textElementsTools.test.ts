@@ -37,11 +37,11 @@ jest.mock("./toolGuard", () => ({
   isToolInvocationAuthorized: jest.fn(() => true)
 }))
 jest.mock("../writePolicy", () => ({
-  assertWriteAllowed: jest.fn(),
+  assertTextElementsAllowed: jest.fn(),
   textElementsTarget: jest.fn(async () => ({ name: "ZPROG" }))
 }))
 import { ManageTextElementsTool } from "./textElementsTools"
-import { assertWriteAllowed } from "../writePolicy"
+import { assertTextElementsAllowed } from "../writePolicy"
 import { getClient, abapUri } from "../../adt/conections"
 import { getTextElementsSafe, updateTextElementsWithTransport } from "../../adt/textElements"
 import { funWindow as window } from "../funMessenger"
@@ -78,13 +78,13 @@ describe("ManageTextElementsTool", () => {
     })
 
     it("rejects denied create/update before reading, locking or writing", async () => {
-      ;(assertWriteAllowed as jest.Mock).mockRejectedValueOnce(
+      ;(assertTextElementsAllowed as jest.Mock).mockRejectedValueOnce(
         new Error("Blocked by ABAP FS write policy")
       )
 
       await expect(tool.invoke(update, mockToken)).rejects.toThrow(/write policy/)
 
-      expect(assertWriteAllowed).toHaveBeenCalledWith({ name: "ZPROG" }, "textElements")
+      expect(assertTextElementsAllowed).toHaveBeenCalledWith({ name: "ZPROG" })
       expect(getTextElementsSafe).not.toHaveBeenCalled()
       expect(updateTextElementsWithTransport).not.toHaveBeenCalled()
     })
@@ -103,7 +103,7 @@ describe("ManageTextElementsTool", () => {
         }),
         mockToken
       )
-      expect(assertWriteAllowed).not.toHaveBeenCalled()
+      expect(assertTextElementsAllowed).not.toHaveBeenCalled()
     })
   })
 

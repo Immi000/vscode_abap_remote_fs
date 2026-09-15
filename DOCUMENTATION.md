@@ -973,6 +973,8 @@ A rule matches when **all** of its specified fields match. A missing or empty fi
 
 Patterns support `*` (any characters) and `?` (one character) and are case-insensitive.
 
+Operation names are case-insensitive. A rule containing an unknown operation name (for example a typo such as `activation`) is treated conservatively: it never allows anything in `allowlist` mode and blocks everything it matches in `denylist` mode. A warning is written to the **ABAP FS** output channel.
+
 ### How objects are identified
 
 - **Includes are checked against their main object.** Editing a method of a class checks the class (`CLAS/OC`), editing a function module checks its function group (`FUGR/F`).
@@ -988,7 +990,7 @@ Patterns support `*` (any characters) and `?` (one character) and are case-insen
 | `delete`       | Deleting objects                                                                                                               |
 | `create`       | Creating objects (command, create object editor, `abapfs_create_object` tool, RAP generator — every generated object)         |
 | `activate`     | Activating objects, including other inactive objects activated together and activation before unit test runs                  |
-| `textElements` | Creating or updating text elements (tool and text elements editor)                                                            |
+| `textElements` | Creating or updating text elements (tool and text elements editor). Saving text elements also activates the object, so `activate` must be allowed as well |
 
 ## Confirm Mode
 

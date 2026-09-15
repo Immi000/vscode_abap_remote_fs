@@ -49,6 +49,8 @@ export interface WritePolicyRule {
   names?: string[]
   types?: string[]
   operations?: WriteOp[]
+  /** operation names in the settings that are not known: the rule never allows, always blocks */
+  invalidOperations?: string[]
 }
 
 export interface WriteTarget {
@@ -75,7 +77,7 @@ export class WritePolicyError extends Error {
   constructor(
     message: string,
     readonly targets: WriteTarget[],
-    readonly op: WriteOp
+    readonly ops: WriteOp[]
   ) {
     super(message)
     this.name = "WritePolicyError"
@@ -113,6 +115,28 @@ const toStringList = (value: unknown): string[] | undefined => {
   return value.filter((v): v is string => typeof v === "string")
 }
 
+const toOperation = (value: string) => WRITE_OPS.find(o => o.toLowerCase() === value.toLowerCase())
+
+const warnedOperations = new Set<string>()
+
+/** Unknown operation names are kept apart, so a typo can never widen the policy */
+function sanitizeOperations(
+  raw: unknown
+): Pick<WritePolicyRule, "operations" | "invalidOperations"> {
+  const values = toStringList(raw)
+  if (!values) return {}
+  const operations = values.map(toOperation).filter((o): o is WriteOp => !!o)
+  const invalidOperations = values.filter(v => !toOperation(v))
+  for (const v of invalidOperations) {
+    if (warnedOperations.has(v)) continue
+    warnedOperations.add(v)
+    log.warn(
+      `[WritePolicy] unknown operation "${v}" in abapfs.writePolicy.rules is treated as denied`
+    )
+  }
+  return { operations, invalidOperations }
+}
+
 function sanitizeRule(raw: unknown): WritePolicyRule | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined
   const r = raw as Record<string, unknown>
@@ -121,7 +145,7 @@ function sanitizeRule(raw: unknown): WritePolicyRule | undefined {
     packages: toStringList(r.packages),
     names: toStringList(r.names),
     types: toStringList(r.types),
-    operations: toStringList(r.operations) as WriteOp[] | undefined
+    ...sanitizeOperations(r.operations)
   }
 }
 
@@ -164,14 +188,21 @@ export function matchesGlob(patterns: string[] | undefined, value: string | unde
   return patterns.some(p => globToRegExp(normalize(p)).test(normalized))
 }
 
-const matchesOperation = (operations: string[] | undefined, op: WriteOp) =>
-  !operations ||
-  operations.length === 0 ||
-  operations.some(o => o.toLowerCase() === op.toLowerCase())
+/** A rule with unknown operation names is conservative: it never allows and always blocks */
+const matchesOperation = (rule: WritePolicyRule, op: WriteOp, mode: WritePolicyMode) => {
+  if (rule.invalidOperations?.length) return mode === "denylist"
+  const { operations } = rule
+  return !operations || operations.length === 0 || operations.includes(op)
+}
 
-export function ruleMatches(rule: WritePolicyRule, target: WriteTarget, op: WriteOp): boolean {
+export function ruleMatches(
+  rule: WritePolicyRule,
+  target: WriteTarget,
+  op: WriteOp,
+  mode: WritePolicyMode
+): boolean {
   return (
-    matchesOperation(rule.operations, op) &&
+    matchesOperation(rule, op, mode) &&
     matchesGlob(rule.connections, target.connectionId) &&
     matchesGlob(rule.packages, target.packageName) &&
     matchesGlob(rule.names, target.name) &&
@@ -181,7 +212,7 @@ export function ruleMatches(rule: WritePolicyRule, target: WriteTarget, op: Writ
 
 export function isWriteAllowed(config: WritePolicyConfig, target: WriteTarget, op: WriteOp) {
   if (!config.enabled) return true
-  const matched = config.rules.some(rule => ruleMatches(rule, target, op))
+  const matched = config.rules.some(rule => ruleMatches(rule, target, op, config.mode))
   return config.mode === "allowlist" ? matched : !matched
 }
 
@@ -192,21 +223,22 @@ export function isWriteAllowed(config: WritePolicyConfig, target: WriteTarget, o
 const describeTarget = (t: WriteTarget) =>
   `${t.type} ${t.name} (package ${t.packageName ?? "unknown"}, connection ${t.connectionId})`
 
-function violationMessage(config: WritePolicyConfig, targets: WriteTarget[], op: WriteOp) {
+function violationMessage(config: WritePolicyConfig, targets: WriteTarget[], ops: WriteOp[]) {
   const reason =
     config.mode === "allowlist" ? "no allowlist rule matches" : "the object matches a denylist rule"
+  const operation = ops.map(op => `"${op}"`).join(" and ")
   return (
-    `Blocked by ABAP FS write policy: operation "${op}" is not permitted for ` +
+    `Blocked by ABAP FS write policy: operation ${operation} is not permitted for ` +
     `${targets.map(describeTarget).join(", ")} - ${reason}. ` +
     `Do not retry or work around this restriction. The user can review the ` +
     `"abapfs.writePolicy" settings in their user settings.`
   )
 }
 
-function logDecision(kind: string, targets: WriteTarget[], op: WriteOp, fromMcp: boolean) {
+function logDecision(kind: string, targets: WriteTarget[], ops: WriteOp[], fromMcp: boolean) {
   for (const t of targets)
     log.warn(
-      `[WritePolicy] ${kind}: connection=${t.connectionId} op=${op} type=${t.type} ` +
+      `[WritePolicy] ${kind}: connection=${t.connectionId} op=${ops.join(",")} type=${t.type} ` +
         `name=${t.name} package=${t.packageName ?? "<unknown>"} source=${fromMcp ? "mcp" : "other"}`
     )
 }
@@ -216,6 +248,9 @@ async function confirmOverride(message: string) {
   const choice = await window.showWarningMessage(message, { modal: true }, allowOnce)
   return choice === allowOnce
 }
+
+export const targetKey = (t: WriteTarget) =>
+  `${t.connectionId}|${t.type}|${normalize(t.name)}`.toUpperCase()
 
 const uniqueTargets = (targets: WriteTarget[]) => {
   const seen = new Set<string>()
@@ -227,34 +262,42 @@ const uniqueTargets = (targets: WriteTarget[]) => {
   })
 }
 
-export const targetKey = (t: WriteTarget) =>
-  `${t.connectionId}|${t.type}|${normalize(t.name)}`.toUpperCase()
-
 /**
- * Throws a WritePolicyError when any target is not allowed for op.
- * With onViolation "confirm" (never for MCP calls) the user may allow the operation once.
+ * Throws a WritePolicyError when any target is not allowed for any of the operations.
+ * With onViolation "confirm" (never for MCP calls) the user may allow the operations once.
  */
-export async function assertWriteAllowedAll(
+async function enforce(targets: WriteTarget[], ops: WriteOp[], options: WriteCheckOptions) {
+  const config = readWritePolicyConfig()
+  if (!config.enabled) return
+  const isDenied = (t: WriteTarget, op: WriteOp) => !isWriteAllowed(config, t, op)
+  const deniedOps = ops.filter(op => targets.some(t => isDenied(t, op)))
+  if (deniedOps.length === 0) return
+  const denied = uniqueTargets(targets.filter(t => deniedOps.some(op => isDenied(t, op))))
+  const fromMcp = options.fromMcp === true || isMcpInvocation()
+  const message = violationMessage(config, denied, deniedOps)
+  if (config.onViolation === "confirm" && !fromMcp && (await confirmOverride(message))) {
+    logDecision("allowed once by user", denied, deniedOps, fromMcp)
+    return
+  }
+  logDecision("denied", denied, deniedOps, fromMcp)
+  throw new WritePolicyError(message, denied, deniedOps)
+}
+
+export function assertWriteAllowedAll(
   targets: WriteTarget[],
   op: WriteOp,
   options: WriteCheckOptions = {}
 ): Promise<void> {
-  const config = readWritePolicyConfig()
-  if (!config.enabled) return
-  const denied = uniqueTargets(targets.filter(t => !isWriteAllowed(config, t, op)))
-  if (denied.length === 0) return
-  const fromMcp = options.fromMcp === true || isMcpInvocation()
-  const message = violationMessage(config, denied, op)
-  if (config.onViolation === "confirm" && !fromMcp && (await confirmOverride(message))) {
-    logDecision("allowed once by user", denied, op, fromMcp)
-    return
-  }
-  logDecision("denied", denied, op, fromMcp)
-  throw new WritePolicyError(message, denied, op)
+  return enforce(targets, [op], options)
 }
 
 export function assertWriteAllowed(target: WriteTarget, op: WriteOp, options?: WriteCheckOptions) {
-  return assertWriteAllowedAll([target], op, options)
+  return enforce([target], [op], options ?? {})
+}
+
+/** Saving text elements also activates the object, so both operations must be allowed */
+export function assertTextElementsAllowed(target: WriteTarget) {
+  return enforce([target], ["textElements", "activate"], {})
 }
 
 /**
@@ -280,6 +323,9 @@ export function clearWritePolicyPackageCache() {
   packageCache.clear()
 }
 
+/** With the policy disabled no target is ever checked, so SAP lookups are skipped entirely */
+const policyEnabled = () => readWritePolicyConfig().enabled
+
 const isPackageStep = (s: PathStep) => `${s["adtcore:type"] ?? ""}`.startsWith("DEVC")
 
 /** The object's immediate package: the last package step before the object itself */
@@ -297,6 +343,7 @@ export async function resolvePackage(
   name: string,
   adtUri: string
 ): Promise<string | undefined> {
+  if (!policyEnabled()) return undefined
   const key = targetKey({ connectionId, type, name })
   const cached = packageCache.get(key)
   if (cached && cached.expires > Date.now()) return cached.packageName
@@ -342,6 +389,7 @@ export async function targetFromAdtObject(
   name: string,
   adtUri: string
 ): Promise<WriteTarget> {
+  if (!policyEnabled()) return { connectionId, type, name }
   try {
     const found = await getRoot(connectionId).findByAdtUri(adtUri)
     if (isAbapStat(found?.file)) return targetFromObject(connectionId, found.file.object)

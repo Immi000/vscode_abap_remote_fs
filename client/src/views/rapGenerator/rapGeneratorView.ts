@@ -202,7 +202,12 @@ export class RapGeneratorPanel implements WebviewViewProvider {
       const previewObjects = await client.rapGenPreview(genId, this.tableUri(tableName), content)
 
       const packageName = content.metadata?.package || undefined
-      const targets = previewObjects.map(o => ({ connectionId: connId, ...o, packageName }))
+      const targets = previewObjects.map(o => ({
+        connectionId: connId,
+        name: o.name,
+        type: o.type,
+        packageName
+      }))
       await assertWriteAllowedAll(targets, "create")
 
       const needsTransport = content.metadata?.package !== "$TMP"

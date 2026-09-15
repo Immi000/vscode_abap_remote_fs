@@ -39,7 +39,7 @@ export interface ActivationEvent {
 export class AdtObjectActivator {
   constructor(
     private client: ADTClient,
-    private connId = ""
+    private connId: string
   ) {}
   private static instances = new Map<string, AdtObjectActivator>()
   private emitter = new EventEmitter<ActivationEvent>()
@@ -65,21 +65,24 @@ export class AdtObjectActivator {
     return main?.["adtcore:uri"]
   }
 
-  /** Write policy check for objects activated together (includes map to their main object) */
+  /**
+   * Write policy check for objects activated together (includes map to their main object).
+   * Targets already allowed during this activation (checked) are not asked again.
+   */
   private async assertActivationAllowed(
     connId: string,
     objects: InactiveObject[],
-    checkedKey?: string
+    checked = new Set<string>()
   ) {
     const targets = await Promise.all(
       objects.map(o =>
         targetFromAdtObject(connId, o["adtcore:type"], o["adtcore:name"], o["adtcore:uri"])
       )
     )
-    await assertWriteAllowedAll(
-      targets.filter(t => targetKey(t) !== checkedKey),
-      "activate"
-    )
+    const pending = targets.filter(t => !checked.has(targetKey(t)))
+    if (pending.length === 0) return
+    await assertWriteAllowedAll(pending, "activate")
+    for (const t of pending) checked.add(targetKey(t))
   }
 
   private async getAllInactiveEntries(): Promise<InactiveObjectRecord[]> {
@@ -504,7 +507,7 @@ export class AdtObjectActivator {
     object: AbapObject,
     uri: Uri,
     interactive: boolean,
-    checkedKey?: string
+    checked: Set<string>
   ) {
     const { name, path } = object.lockObject
     let result
@@ -533,7 +536,7 @@ export class AdtObjectActivator {
 
       if (selectedObjects && selectedObjects.length > 0) {
         // Activate all selected objects (including main object)
-        await this.assertActivationAllowed(uri.authority, selectedObjects, checkedKey)
+        await this.assertActivationAllowed(uri.authority, selectedObjects, checked)
         result = await this.client.activate(selectedObjects)
       } else {
         // User cancelled - don't activate anything, return a cancelled result
@@ -570,12 +573,12 @@ export class AdtObjectActivator {
             : fallbackObjects
 
           if (selectedObjects && selectedObjects.length > 0) {
-            await this.assertActivationAllowed(uri.authority, selectedObjects, checkedKey)
+            await this.assertActivationAllowed(uri.authority, selectedObjects, checked)
             result = await this.client.activate(selectedObjects)
           }
         } else if (fallbackObjects.length === 1) {
           // Only one object (probably just the main object), activate it directly
-          await this.assertActivationAllowed(uri.authority, fallbackObjects, checkedKey)
+          await this.assertActivationAllowed(uri.authority, fallbackObjects, checked)
           result = await this.client.activate(fallbackObjects)
         }
       }
@@ -588,11 +591,11 @@ export class AdtObjectActivator {
     object: AbapObject,
     uri: Uri,
     interactive: boolean,
-    checkedKey: string
+    checked: Set<string>
   ) {
-    const result = await this.tryActivate(object, uri, false, checkedKey)
+    const result = await this.tryActivate(object, uri, false, checked)
     if (result.success) return result
-    return this.tryActivate(object, uri, interactive, checkedKey)
+    return this.tryActivate(object, uri, interactive, checked)
   }
 
   public async activate(
@@ -604,9 +607,11 @@ export class AdtObjectActivator {
     // Outside the try block: a write policy violation must reach the caller (e.g. the LLM)
     const mainTarget = await targetFromObject(uri.authority, object)
     await assertWriteAllowed(mainTarget, "activate")
+    // objects allowed so far: the non-interactive and interactive passes must not ask twice
+    const checked = new Set([targetKey(mainTarget)])
 
     try {
-      const result = await this.tryActivate2(object, uri, interactive, targetKey(mainTarget))
+      const result = await this.tryActivate2(object, uri, interactive, checked)
       const mainProg = await this.getMain(object, uri)
 
       if (result && result.success) {
