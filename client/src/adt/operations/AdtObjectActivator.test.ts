@@ -57,7 +57,15 @@ jest.mock("../../services/funMessenger", () => ({
 
 jest.mock("abapobject", () => ({}))
 
+jest.mock("../../services/writePolicy", () => ({
+  assertWriteAllowed: jest.fn(),
+  assertWriteAllowedAll: jest.fn(),
+  targetFromObject: jest.fn(async () => ({ name: "MAIN" })),
+  targetFromAdtObject: jest.fn(async () => ({ name: "OTHER" })),
+  targetKey: jest.fn((t: { name: string }) => t.name)
+}))
 import { AdtObjectActivator, ActivationEvent } from "./AdtObjectActivator"
+import * as writePolicy from "../../services/writePolicy"
 import { getClient } from "../conections"
 
 const mockGetClient = getClient as jest.Mock
@@ -115,5 +123,53 @@ describe("AdtObjectActivator", () => {
   it("constructor uses stateless client", () => {
     AdtObjectActivator.get("conn4")
     expect(mockGetClient).toHaveBeenCalledWith("conn4", false)
+  })
+
+  describe("write policy", () => {
+    const denied = new Error("Blocked by ABAP FS write policy")
+    const makeObject = () => {
+      const main: any = { type: "CLAS/OC", name: "ZCL_X", path: "/classes/zcl_x" }
+      main.lockObject = main
+      main.loadStructure = jest.fn()
+      return main
+    }
+    const uri = { authority: "conn", path: "/zcl_x" } as any
+
+    it("rejects activation of a denied object before calling SAP", async () => {
+      ;(writePolicy.assertWriteAllowed as jest.Mock).mockRejectedValueOnce(denied)
+      const activator = AdtObjectActivator.get("conn")
+
+      await expect(activator.activate(makeObject(), uri, false)).rejects.toBe(denied)
+
+      expect(writePolicy.assertWriteAllowed).toHaveBeenCalledWith({ name: "MAIN" }, "activate")
+      expect(mockClient.activate).not.toHaveBeenCalled()
+    })
+
+    it("checks additional inactive objects activated together", async () => {
+      const sibling = (uri: string, name: string) => ({
+        object: {
+          "adtcore:uri": uri,
+          "adtcore:parentUri": "/classes/zcl_x",
+          "adtcore:type": "CLAS/I",
+          "adtcore:name": name
+        }
+      })
+      mockClient.inactiveObjects.mockResolvedValue([
+        sibling("/classes/zcl_x", "ZCL_X"),
+        sibling("/classes/zcl_other", "ZCL_OTHER")
+      ])
+      ;(writePolicy.assertWriteAllowedAll as jest.Mock).mockRejectedValue(denied)
+      const activator = AdtObjectActivator.get("conn")
+
+      const result = await activator.activate(makeObject(), uri, false)
+
+      expect(result.ok).toBe(false)
+      expect(result.summary).toContain("write policy")
+      expect(writePolicy.assertWriteAllowedAll).toHaveBeenCalledWith(
+        [{ name: "OTHER" }, { name: "OTHER" }],
+        "activate"
+      )
+      expect(mockClient.activate).not.toHaveBeenCalled()
+    })
   })
 })

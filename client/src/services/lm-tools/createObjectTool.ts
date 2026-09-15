@@ -7,6 +7,7 @@ import * as vscode from "vscode"
 import { registerToolWithRegistry } from "./toolRegistry"
 import { logTelemetry } from "../telemetry"
 import { assertToolInvocationAuthorized } from "./toolGuard"
+import { assertWriteNotBlocked, creationTarget } from "../writePolicy"
 
 // ============================================================================
 // INTERFACE
@@ -42,11 +43,24 @@ export interface ICreateObjectParameters {
  * 🏗️ CREATE ABAP OBJECT TOOL - Programmatic object creation
  */
 export class CreateABAPObjectTool implements vscode.LanguageModelTool<ICreateObjectParameters> {
+  /**
+   * Early, non-interactive write policy refusal. The authoritative check (including the
+   * "confirm" dialog) happens in AdtObjectCreator.createObject.
+   */
+  private async refuseEarly(input: ICreateObjectParameters) {
+    const { objectType, name, packageName = "$TMP", parentName, connectionId } = input
+    if (!connectionId || !objectType || !name) return
+    const details = { objtype: objectType, name: name.toUpperCase(), parentName }
+    const target = await creationTarget(connectionId.toLowerCase(), details, packageName)
+    await assertWriteNotBlocked(target, "create")
+  }
+
   async prepareInvocation(
     options: vscode.LanguageModelToolInvocationPrepareOptions<ICreateObjectParameters>,
     _token: vscode.CancellationToken
   ) {
     const { objectType, name, description, packageName = "$TMP", connectionId } = options.input
+    await this.refuseEarly(options.input)
 
     const confirmationMessages = {
       title: "Create ABAP Object",
@@ -87,6 +101,7 @@ export class CreateABAPObjectTool implements vscode.LanguageModelTool<ICreateObj
     }
 
     try {
+      await this.refuseEarly({ ...options.input, connectionId, packageName })
       const result = await vscode.commands.executeCommand(
         "abapfs.createObjectProgrammatically",
         objectType,

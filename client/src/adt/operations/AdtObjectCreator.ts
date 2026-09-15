@@ -29,6 +29,7 @@ import { MySearchResult, AdtObjectFinder, pathSequence, createUri } from "./AdtO
 import { getClient, getRoot } from "../conections"
 import { isAbapFolder, isAbapStat, isFolder } from "abapfs"
 import { fromNode } from "abapobject"
+import { assertWriteAllowed, creationTarget } from "../../services/writePolicy"
 import { pipe } from "fp-ts/lib/pipeable"
 import { bind, chain, map } from "fp-ts/lib/TaskEither"
 
@@ -96,6 +97,8 @@ export class AdtObjectCreator {
       }
 
       const { options, devclass } = objDetails
+
+      await assertWriteAllowed(await creationTarget(this.connId, options, devclass), "create")
 
       await this.validateObject(options)
 

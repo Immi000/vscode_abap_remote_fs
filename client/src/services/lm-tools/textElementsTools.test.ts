@@ -36,7 +36,12 @@ jest.mock("./toolGuard", () => ({
   assertToolInvocationAuthorized: jest.fn(),
   isToolInvocationAuthorized: jest.fn(() => true)
 }))
+jest.mock("../writePolicy", () => ({
+  assertWriteAllowed: jest.fn(),
+  textElementsTarget: jest.fn(async () => ({ name: "ZPROG" }))
+}))
 import { ManageTextElementsTool } from "./textElementsTools"
+import { assertWriteAllowed } from "../writePolicy"
 import { getClient, abapUri } from "../../adt/conections"
 import { getTextElementsSafe, updateTextElementsWithTransport } from "../../adt/textElements"
 import { funWindow as window } from "../funMessenger"
@@ -58,6 +63,48 @@ describe("ManageTextElementsTool", () => {
     ;(getClient as jest.Mock).mockReturnValue(mockClient)
     ;(window as any).activeTextEditor = undefined
     mockClient.stateful = undefined
+  })
+
+  // =========================================================================
+  // write policy
+  // =========================================================================
+  describe("write policy", () => {
+    const update = makeOptions({
+      objectName: "ZPROG",
+      objectType: "PROGRAM",
+      action: "update",
+      textElements: [{ id: "001", text: "Hello" }],
+      connectionId: "DEV100"
+    })
+
+    it("rejects denied create/update before reading, locking or writing", async () => {
+      ;(assertWriteAllowed as jest.Mock).mockRejectedValueOnce(
+        new Error("Blocked by ABAP FS write policy")
+      )
+
+      await expect(tool.invoke(update, mockToken)).rejects.toThrow(/write policy/)
+
+      expect(assertWriteAllowed).toHaveBeenCalledWith({ name: "ZPROG" }, "textElements")
+      expect(getTextElementsSafe).not.toHaveBeenCalled()
+      expect(updateTextElementsWithTransport).not.toHaveBeenCalled()
+    })
+
+    it("does not check reads", async () => {
+      ;(getTextElementsSafe as jest.Mock).mockResolvedValue({
+        textElements: [],
+        programName: "ZPROG"
+      })
+      await tool.invoke(
+        makeOptions({
+          objectName: "ZPROG",
+          objectType: "PROGRAM",
+          action: "read",
+          connectionId: "d"
+        }),
+        mockToken
+      )
+      expect(assertWriteAllowed).not.toHaveBeenCalled()
+    })
   })
 
   // =========================================================================

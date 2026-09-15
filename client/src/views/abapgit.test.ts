@@ -139,6 +139,10 @@ jest.mock(
 
 jest.mock("uuid", () => ({ v1: jest.fn(() => "test-uuid") }), { virtual: true })
 
+jest.mock("../services/writePolicy", () => ({
+  assertWriteAllowed: jest.fn(),
+  packageTarget: jest.fn(() => ({}))
+}))
 import { confirmPull, packageUri } from "./abapgit"
 import { funWindow as window } from "../services/funMessenger"
 

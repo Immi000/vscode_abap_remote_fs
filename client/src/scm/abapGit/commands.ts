@@ -45,6 +45,7 @@ import { selectTransport } from "../../adt/AdtTransports"
 import { pickAdtRoot } from "../../config"
 import { isRight, isLeft } from "fp-ts/lib/Either"
 import { confirmPull, packageUri } from "../../views/abapgit"
+import { assertWriteAllowed, packageTarget } from "../../services/writePolicy"
 import { getClient, uriRoot } from "../../adt/conections"
 import { funWindow as window } from "../../services/funMessenger"
 
@@ -204,6 +205,7 @@ export class GitCommands {
   private static async pullCmd(data: ScmData) {
     if (await confirmPull(data.repo.sapPackage))
       return withp("Pulling repo", async () => {
+        await assertWriteAllowed(packageTarget(data.connId, data.repo.sapPackage), "write")
         const client = await getClient(data.connId)
         await dataCredentials(data)
         const uri = await packageUri(client, data.repo.sapPackage)

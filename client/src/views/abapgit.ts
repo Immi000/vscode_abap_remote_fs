@@ -14,6 +14,7 @@ import { GitRepo, ADTClient, objectPath } from "abap-adt-api"
 import { v1 } from "uuid"
 import { command, AbapFsCommands } from "../commands"
 import { PACKAGE } from "../adt/operations/AdtObjectCreator"
+import { assertWriteAllowed, packageTarget } from "../services/writePolicy"
 import { selectTransport } from "../adt/AdtTransports"
 import {
   chainTaskTransformers,
@@ -194,7 +195,9 @@ class AbapGitProvider implements TreeDataProvider<TreeItem> {
 
   private async pull(repoItem: AbapGitItem) {
     if (!(await confirmPull(repoItem.repo.sapPackage))) return
-    const client = getClient(this.repoServer(repoItem).connId)
+    const connId = this.repoServer(repoItem).connId
+    await assertWriteAllowed(packageTarget(connId, repoItem.repo.sapPackage), "write")
+    const client = getClient(connId)
 
     const uri = await packageUri(client, repoItem.repo.sapPackage)
     const transport = await selectTransport(uri, repoItem.repo.sapPackage, client)

@@ -81,6 +81,10 @@ jest.mock("fp-ts/lib/TaskEither", () => ({
   map: jest.fn()
 }))
 
+jest.mock("../../services/writePolicy", () => ({
+  assertWriteAllowed: jest.fn(),
+  creationTarget: jest.fn(async () => ({}))
+}))
 import { AdtObjectCreator, selectObjectType, PACKAGE, TMPPACKAGE } from "./AdtObjectCreator"
 
 describe("constants", () => {

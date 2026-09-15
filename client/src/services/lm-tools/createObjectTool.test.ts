@@ -20,6 +20,10 @@ jest.mock("./toolGuard", () => ({
   assertToolInvocationAuthorized: jest.fn(),
   isToolInvocationAuthorized: jest.fn(() => true)
 }))
+jest.mock("../writePolicy", () => ({
+  assertWriteNotBlocked: jest.fn(),
+  creationTarget: jest.fn(async () => ({}))
+}))
 import { CreateABAPObjectTool } from "./createObjectTool"
 import * as vscode from "vscode"
 import { logTelemetry } from "../telemetry"

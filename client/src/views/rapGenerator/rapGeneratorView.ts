@@ -16,6 +16,7 @@ import { AbapFsCommands, command, openObject } from "../../commands"
 import { caughtToString } from "../../lib"
 import { AdtObjectFinder, uriAbapFile } from "../../adt/operations/AdtObjectFinder"
 import { RapGeneratorContent, RapGeneratorId } from "abap-adt-api"
+import { assertWriteAllowedAll } from "../../services/writePolicy"
 
 export class RapGeneratorPanel implements WebviewViewProvider {
   public static readonly viewType = "abapfs.rapGenerator"
@@ -199,6 +200,10 @@ export class RapGeneratorPanel implements WebviewViewProvider {
 
       // Get full object list via preview before generating
       const previewObjects = await client.rapGenPreview(genId, this.tableUri(tableName), content)
+
+      const packageName = content.metadata?.package || undefined
+      const targets = previewObjects.map(o => ({ connectionId: connId, ...o, packageName }))
+      await assertWriteAllowedAll(targets, "create")
 
       const needsTransport = content.metadata?.package !== "$TMP"
 

@@ -2,6 +2,7 @@ import {
   ADTClient,
   isAdtError,
   inactiveObjectsInResults,
+  InactiveObject,
   InactiveObjectRecord,
   InactiveObjectElement
 } from "abap-adt-api"
@@ -11,6 +12,13 @@ import { getClient } from "../conections"
 import { IncludeProvider, IncludeService } from "../includes"
 import { isDefined, channel } from "../../lib"
 import { funWindow as window } from "../../services/funMessenger"
+import {
+  assertWriteAllowed,
+  assertWriteAllowedAll,
+  targetFromAdtObject,
+  targetFromObject,
+  targetKey
+} from "../../services/writePolicy"
 
 // Log activation errors to ABAP FS output channel
 const logError = (message: string) => {
@@ -29,7 +37,10 @@ export interface ActivationEvent {
 }
 
 export class AdtObjectActivator {
-  constructor(private client: ADTClient) {}
+  constructor(
+    private client: ADTClient,
+    private connId = ""
+  ) {}
   private static instances = new Map<string, AdtObjectActivator>()
   private emitter = new EventEmitter<ActivationEvent>()
   public static get(connId: string) {
@@ -37,7 +48,7 @@ export class AdtObjectActivator {
     if (instance) return instance
     const stateless_client = getClient(connId, false)
     // stateful_client.stateful = session_types.stateful
-    const newinstance = new AdtObjectActivator(stateless_client)
+    const newinstance = new AdtObjectActivator(stateless_client, connId)
     this.instances.set(connId, newinstance)
     return newinstance
   }
@@ -52,6 +63,23 @@ export class AdtObjectActivator {
     const provider = IncludeProvider.get()
     const main = service.current(uri.path) || (await provider.switchIncludeIfMissing(uri))
     return main?.["adtcore:uri"]
+  }
+
+  /** Write policy check for objects activated together (includes map to their main object) */
+  private async assertActivationAllowed(
+    connId: string,
+    objects: InactiveObject[],
+    checkedKey?: string
+  ) {
+    const targets = await Promise.all(
+      objects.map(o =>
+        targetFromAdtObject(connId, o["adtcore:type"], o["adtcore:name"], o["adtcore:uri"])
+      )
+    )
+    await assertWriteAllowedAll(
+      targets.filter(t => targetKey(t) !== checkedKey),
+      "activate"
+    )
   }
 
   private async getAllInactiveEntries(): Promise<InactiveObjectRecord[]> {
@@ -441,6 +469,7 @@ export class AdtObjectActivator {
         }
       }
 
+      await this.assertActivationAllowed(this.connId, selectedObjects)
       const result = await this.client.activate(selectedObjects)
       if (result?.success) {
         return {
@@ -471,7 +500,12 @@ export class AdtObjectActivator {
     }
   }
 
-  private async tryActivate(object: AbapObject, uri: Uri, interactive: boolean) {
+  private async tryActivate(
+    object: AbapObject,
+    uri: Uri,
+    interactive: boolean,
+    checkedKey?: string
+  ) {
     const { name, path } = object.lockObject
     let result
     const mainProg = await this.getMain(object, uri)
@@ -499,6 +533,7 @@ export class AdtObjectActivator {
 
       if (selectedObjects && selectedObjects.length > 0) {
         // Activate all selected objects (including main object)
+        await this.assertActivationAllowed(uri.authority, selectedObjects, checkedKey)
         result = await this.client.activate(selectedObjects)
       } else {
         // User cancelled - don't activate anything, return a cancelled result
@@ -535,10 +570,12 @@ export class AdtObjectActivator {
             : fallbackObjects
 
           if (selectedObjects && selectedObjects.length > 0) {
+            await this.assertActivationAllowed(uri.authority, selectedObjects, checkedKey)
             result = await this.client.activate(selectedObjects)
           }
         } else if (fallbackObjects.length === 1) {
           // Only one object (probably just the main object), activate it directly
+          await this.assertActivationAllowed(uri.authority, fallbackObjects, checkedKey)
           result = await this.client.activate(fallbackObjects)
         }
       }
@@ -547,10 +584,15 @@ export class AdtObjectActivator {
     return result
   }
 
-  private async tryActivate2(object: AbapObject, uri: Uri, interactive: boolean) {
-    const result = await this.tryActivate(object, uri, false)
+  private async tryActivate2(
+    object: AbapObject,
+    uri: Uri,
+    interactive: boolean,
+    checkedKey: string
+  ) {
+    const result = await this.tryActivate(object, uri, false, checkedKey)
     if (result.success) return result
-    return this.tryActivate(object, uri, interactive)
+    return this.tryActivate(object, uri, interactive, checkedKey)
   }
 
   public async activate(
@@ -559,9 +601,12 @@ export class AdtObjectActivator {
     interactive = true
   ): Promise<{ ok: boolean; summary?: string; details?: string }> {
     const inactive = object.lockObject
+    // Outside the try block: a write policy violation must reach the caller (e.g. the LLM)
+    const mainTarget = await targetFromObject(uri.authority, object)
+    await assertWriteAllowed(mainTarget, "activate")
 
     try {
-      const result = await this.tryActivate2(object, uri, interactive)
+      const result = await this.tryActivate2(object, uri, interactive, targetKey(mainTarget))
       const mainProg = await this.getMain(object, uri)
 
       if (result && result.success) {

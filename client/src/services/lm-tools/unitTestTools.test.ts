@@ -63,6 +63,10 @@ jest.mock("../../adt/operations/AdtObjectActivator", () => ({
   AdtObjectActivator: { get: jest.fn(() => ({ activate: mockActivate })) }
 }))
 
+jest.mock("../writePolicy", () => ({
+  assertWriteNotBlocked: jest.fn(),
+  targetFromAdtObject: jest.fn(async () => ({}))
+}))
 import { CreateTestIncludeTool, RunUnitTestsTool } from "./unitTestTools"
 import { getSearchService } from "../abapSearchService"
 import { getOrCreateRoot } from "../../adt/conections"

@@ -14,6 +14,7 @@ import { UnitTestRunner } from "../../adt/operations/UnitTestRunner"
 import { isAbapFile, isAbapStat, PathItem } from "abapfs"
 import { AdtObjectActivator } from "../../adt/operations/AdtObjectActivator"
 import { assertToolInvocationAuthorized } from "./toolGuard"
+import { assertWriteNotBlocked, targetFromAdtObject } from "../writePolicy"
 import { showHideActivate } from "../../listeners"
 
 // ============================================================================
@@ -81,6 +82,12 @@ export class CreateTestIncludeTool implements vscode.LanguageModelTool<ICreateTe
       if (!classInfo.uri) {
         throw new Error(`Could not get URI for ABAP class: ${className}.`)
       }
+
+      // The command reports errors only in the UI, so refuse here where the LLM sees it
+      const connId = connectionId.toLowerCase()
+      const clas = className.toUpperCase()
+      const target = await targetFromAdtObject(connId, "CLAS/OC", clas, classInfo.uri)
+      await assertWriteNotBlocked(target, "write")
 
       const root = await getOrCreateRoot(connectionId.toLowerCase())
       const result = await root.findByAdtUri(classInfo.uri, true)

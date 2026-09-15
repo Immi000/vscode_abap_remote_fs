@@ -14,6 +14,7 @@ import { isAbapStat, isFolder } from "abapfs"
 import { fromNode } from "abapobject"
 import { transportValidators } from "../adt/AdtTransports"
 import { PACKAGE, AdtObjectCreator } from "../adt/operations/AdtObjectCreator"
+import { assertWriteAllowed, creationTarget } from "../services/writePolicy"
 import { AdtObjectFinder, MySearchResult, pathSequence } from "../adt/operations/AdtObjectFinder"
 import { getClient, getRoot } from "../adt/conections"
 import { pickAdtRoot } from "../config"
@@ -534,6 +535,8 @@ function validateFormInput(input: CreateObjectFormInput, type: CreateObjectTypeO
 async function createObjectFromForm(connId: string, rawInput: CreateObjectFormInput) {
   const input = normalizeInput(rawInput)
   const details = await buildCreationDetails(connId, input)
+  const target = await creationTarget(connId, details.options, input.packageName)
+  await assertWriteAllowed(target, "create")
   await details.creator.validateObject(details.options)
   details.options.transport = await resolveTransportForCreate(connId, input, details)
   await getClient(connId).createObject(details.options)

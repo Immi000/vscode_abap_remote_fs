@@ -1,4 +1,5 @@
 import { PACKAGE, AdtObjectCreator } from "../adt/operations/AdtObjectCreator"
+import { assertWriteAllowed, targetFromObject } from "../services/writePolicy"
 import {
   CreatableTypeIds,
   PackageTypes,
@@ -202,6 +203,7 @@ export class AdtCommands {
     const file = await root.getNodeAsync(uri.path)
     if (isAbapFile(file)) {
       const o = file.object
+      await assertWriteAllowed(await targetFromObject(uri.authority, o), "write")
       const proposal = await client.extractMethodEvaluate(o.path, rangeVscToApi(range))
       const methodName = await window.showInputBox({ prompt: "Method name" })
       if (!methodName) return
@@ -1173,6 +1175,9 @@ export class AdtCommands {
             window.showInformationMessage("Test include already exists")
             return // This will properly close the progress window
           }
+
+          // Adding a test include changes the class: checked as "write" before locking
+          await assertWriteAllowed(await targetFromObject(uri.authority, obj), "write")
 
           progress.report({ message: "Acquiring lock..." })
           const m = uriRoot(uri).lockManager

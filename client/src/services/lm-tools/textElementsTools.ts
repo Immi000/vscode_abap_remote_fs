@@ -11,6 +11,7 @@ import {
 } from "../../adt/textElements"
 import { openTextElementsInSapGui } from "../../commands/textElementsCommands"
 import { assertToolInvocationAuthorized } from "./toolGuard"
+import { assertWriteAllowed, textElementsTarget } from "../writePolicy"
 
 // Text Elements Tool Interfaces
 export interface IManageTextElementsParameters {
@@ -121,6 +122,11 @@ export class ManageTextElementsTool implements vscode.LanguageModelTool<IManageT
           )
         }
         actualConnectionId = activeEditor.document.uri.authority
+      }
+
+      if (action === "create" || action === "update") {
+        const target = await textElementsTarget(actualConnectionId, objectName, objectType)
+        await assertWriteAllowed(target, "textElements")
       }
 
       const stateless_clone = action === "read" ? true : false
