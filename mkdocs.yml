@@ -45,6 +45,7 @@ nav:
     - Subagents: ai/subagents.md
     - Skills: ai/skills.md
     - Heartbeat: ai/heartbeat.md
+    - Write Policy: ai/write-policy.md
   - Editor:
     - Hover Information: editor/hover-information.md
     - Views & Panels: editor/views-panels.md

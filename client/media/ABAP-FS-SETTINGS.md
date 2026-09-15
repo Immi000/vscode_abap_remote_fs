@@ -17,6 +17,7 @@ This document provides a comprehensive reference for all ABAP FS extension setti
 9. [Feed Subscriptions](#9-feed-subscriptions)
 10. [Blame Annotations](#10-blame-annotations)
 11. [Editor Defaults](#11-editor-defaults)
+12. [Write Policy](#12-write-policy)
 
 ---
 
@@ -427,6 +428,53 @@ ABAP FS sets recommended editor defaults for ABAP files:
 | `editor.hover.above` | `false` | Show hover below the cursor. |
 
 These are automatically applied but can be overridden in user settings.
+
+---
+
+## 12. Write Policy
+
+Restricts which SAP objects ABAP FS may create, change, delete, activate or edit text elements for — for GitHub Copilot, the MCP server and manual actions alike. These settings are **only read from user settings**; workspace settings are ignored so an AI agent cannot weaken the policy. SAP authorizations (S_DEVELOP) remain the authoritative control.
+
+### `abapfs.writePolicy.enabled`
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `enabled` | boolean | `false` | Turns the write policy on. |
+
+### `abapfs.writePolicy.mode`
+
+| Property | Type | Default | Values | Description |
+|----------|------|---------|--------|-------------|
+| `mode` | string | `"allowlist"` | `allowlist`, `denylist` | `allowlist`: only operations matching a rule are allowed. `denylist`: operations matching a rule are blocked. |
+
+### `abapfs.writePolicy.onViolation`
+
+| Property | Type | Default | Values | Description |
+|----------|------|---------|--------|-------------|
+| `onViolation` | string | `"block"` | `block`, `confirm` | `block`: refuse the operation (the AI receives the error). `confirm`: modal warning with "Allow once". MCP requests are always blocked. |
+
+### `abapfs.writePolicy.rules`
+
+Array of rules. A rule matches when all specified fields match; missing or empty fields match everything. Patterns support `*` and `?` and are case-insensitive.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `connections` | string[] | Connection IDs, e.g. `"dev*"` |
+| `packages` | string[] | Immediate package of the object, e.g. `"$TMP"`, `"Z_AI_SANDBOX*"`. Unknown packages never match. |
+| `names` | string[] | Object names, e.g. `"ZCL_AI_*"`. Includes are checked against their main object (class, function group). |
+| `types` | string[] | ADT object types, e.g. `"CLAS/OC"`, `"PROG/P"` |
+| `operations` | string[] | `write`, `delete`, `create`, `activate`, `textElements`. Omit for all operations. |
+
+**Example:**
+```json
+{
+  "abapfs.writePolicy.enabled": true,
+  "abapfs.writePolicy.rules": [
+    { "connections": ["dev*"], "packages": ["$TMP", "Z_AI_SANDBOX*"] },
+    { "connections": ["dev*"], "names": ["ZCL_AI_*"], "types": ["CLAS/OC"], "operations": ["write", "activate"] }
+  ]
+}
+```
 
 ---
 

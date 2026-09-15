@@ -135,6 +135,8 @@ MCP clients can now edit ABAP source code directly. The workflow:
 
 Edits are immediately synced to SAP (ABAP FS handles locking, saving, and unlocking automatically). There is no keep/undo UI — changes are applied directly.
 
+> **Restrict what MCP clients can change:** Enable the [Write Policy](ai/write-policy.md) to limit edits, object creation, deletion, activation and text element changes to specific connections, packages, object names or types. Requests from MCP clients that violate the policy are always blocked — they never get the "Allow once" confirmation.
+
 
 ## Limitations
 
